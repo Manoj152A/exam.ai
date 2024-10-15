@@ -15,9 +15,6 @@ shape_predictor_file = os.path.join("models", "shape_predictor_68_face_landmarks
 if not os.path.isfile(shape_predictor_file):
     print(f"Error: {shape_predictor_file} not found.")
     print("Please ensure the file is in the 'models' folder.")
-    print("If not, download it from:")
-    print("http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2")
-    print("Extract the file and place it in the 'models' folder.")
     exit(1)
 
 # Initialize dlib's face detector and facial landmark predictor
@@ -25,9 +22,15 @@ detector = dlib.get_frontal_face_detector()
 predictor = dlib.shape_predictor(shape_predictor_file)
 logging.info("Dlib models loaded successfully")
 
-# Global variables for thread-safe frame sharing
-global_frame = None
-frame_lock = threading.Lock()
+# Global variables
+camera = None
+output_file = None
+out = None
+is_camera_active = False
+camera_lock = threading.Lock()
+
+# Set a lower target FPS to ensure all frames are processed
+TARGET_FPS = 10
 
 def detect_faces(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -45,69 +48,79 @@ def detect_faces(frame):
     
     return frame
 
-def capture_frames():
-    global global_frame
-    camera = cv2.VideoCapture(0)
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    camera.set(cv2.CAP_PROP_FPS, 30)
-    
-    frame_count = 0
-    skip_frames = 2
-    last_detection_time = time.time()
-    fps = 0
-    
-    while True:
-        success, frame = camera.read()
-        if not success:
-            logging.error("Failed to grab frame")
-            time.sleep(0.1)
-            continue
-        
-        frame_count += 1
-        
-        if frame_count % skip_frames == 0:
-            frame = detect_faces(frame)
-            last_detection_time = time.time()
-        
-        # Calculate and display FPS
-        current_time = time.time()
-        if current_time - last_detection_time >= 1.0:
-            fps = frame_count / (current_time - last_detection_time)
-            frame_count = 0
-            last_detection_time = current_time
-        
-        cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
-        with frame_lock:
-            global_frame = frame.copy()
-        
-        # Adaptive frame skipping
-        processing_time = time.time() - last_detection_time
-        if processing_time > 0.033:  # If processing takes more than 33ms (30 fps)
-            skip_frames = min(skip_frames + 1, 5)  # Increase skip frames, max 5
-        elif processing_time < 0.02:  # If processing takes less than 20ms
-            skip_frames = max(skip_frames - 1, 1)  # Decrease skip frames, min 1
-        
-        time.sleep(0.001)  # Small delay to prevent CPU overuse
-
 def generate_frames():
-    global global_frame
-    while True:
-        with frame_lock:
-            if global_frame is None:
+    global camera, out, is_camera_active, output_file
+    
+    with camera_lock:
+        if not is_camera_active:
+            camera = cv2.VideoCapture(0)
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            camera.set(cv2.CAP_PROP_FPS, TARGET_FPS)
+            
+            output_folder = r"C:\Users\manoj\Videos\ai"
+            os.makedirs(output_folder, exist_ok=True)
+            output_file = os.path.join(output_folder, f"ai_recording_{time.strftime('%Y%m%d_%H%M%S')}.avi")
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            out = cv2.VideoWriter(output_file, fourcc, TARGET_FPS, (640, 480))
+            
+            is_camera_active = True
+            logging.info("Camera and recording started")
+    
+    try:
+        start_time = time.time()
+        frame_count = 0
+        while True:
+            frame_start = time.time()
+            
+            success, frame = camera.read()
+            if not success:
+                logging.error("Failed to grab frame")
+                break
+            
+            frame = detect_faces(frame)
+            
+            # Calculate and display FPS
+            frame_count += 1
+            elapsed_time = time.time() - start_time
+            fps = frame_count / elapsed_time
+            cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            # Write frame to video file
+            out.write(frame)
+            
+            # Encode frame for streaming
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ret:
+                logging.error("Failed to encode frame")
                 continue
             
-            frame = global_frame.copy()
-        
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not ret:
-            continue
-        
-        frame = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            
+            # Calculate the time to sleep to maintain the target FPS
+            processing_time = time.time() - frame_start
+            sleep_time = max(1.0/TARGET_FPS - processing_time, 0)
+            time.sleep(sleep_time)
+            
+            # Log actual frame processing time
+            actual_frame_time = time.time() - frame_start
+            logging.debug(f"Frame {frame_count}: Processing time = {processing_time:.4f}s, Sleep time = {sleep_time:.4f}s, Total frame time = {actual_frame_time:.4f}s")
+            
+            # Check if we're maintaining real-time
+            if frame_count % TARGET_FPS == 0:
+                expected_time = frame_count / TARGET_FPS
+                actual_time = elapsed_time
+                logging.info(f"After {frame_count} frames: Expected time = {expected_time:.2f}s, Actual time = {actual_time:.2f}s, Difference = {actual_time - expected_time:.2f}s")
+    finally:
+        with camera_lock:
+            if is_camera_active:
+                camera.release()
+                out.release()
+                is_camera_active = False
+                logging.info(f"Camera stopped and recording saved to {output_file}")
+                logging.info(f"Total frames: {frame_count}, Total time: {elapsed_time:.2f}s, Average FPS: {frame_count/elapsed_time:.2f}")
 
 @app.route('/')
 def index():
@@ -120,5 +133,4 @@ def video_feed():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    threading.Thread(target=capture_frames, daemon=True).start()
     app.run(debug=True, threaded=True)

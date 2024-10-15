@@ -3,10 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Face Detection</title>
+    <title>Face Detection Live Feed</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .container {
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+        }
+        #videoFeed {
+            max-width: 100%;
+            height: auto;
+            border: 3px solid #333;
+            border-radius: 10px;
+        }
+    </style>
 </head>
 <body>
-    <h1>Live Face Detection</h1>
-    <img src="{{ url_for('video_feed') }}" alt="Live Face Detection">
+    <div class="container">
+        <h1>Face Detection Live Feed</h1>
+        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Live Video Feed">
+    </div>
+
+    <script>
+        window.addEventListener('beforeunload', function() {
+            // Stop the video feed
+            document.getElementById('videoFeed').src = '';
+        });
+    </script>
 </body>
 </html>
