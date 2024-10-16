@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exam - AI Proctoring System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+    <header>
+        <h1>AI Proctoring System - Exam in Progress</h1>
+    </header>
+    <main>
+        <div class="exam-container">
+            <div class="video-feed">
+                <h3>Live Feed</h3>
+                <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Live Proctoring Feed">
+            </div>
+            <div class="exam-content">
+                <h2>Exam for {{ candidate_name }}</h2>
+                <!-- Add your exam content here -->
+                <textarea rows="10" cols="50" placeholder="Enter your exam answers here..."></textarea>
+                <button id="submitExam">Submit Exam</button>
+            </div>
+            <div class="alerts">
+                <h3>Alerts</h3>
+                <div id="alertsContainer"></div>
+            </div>
+        </div>
+    </main>
+    <script>
+        $(document).ready(function() {
+            $.get('/start_exam');
+
+            function updateAlerts() {
+                $.get('/get_alerts', function(data) {
+                    $('#alertsContainer').empty();
+                    data.alerts.forEach(function(alert) {
+                        $('#alertsContainer').append('<p class="alert">' + alert + '</p>');
+                    });
+                });
+            }
+
+            setInterval(updateAlerts, 5000);
+
+            $('#submitExam').click(function() {
+                $.get('/end_exam', function(data) {
+                    alert('Thanks for your time. Your exam has been submitted.');
+                    window.location.href = '/';
+                });
+            });
+        });
+    </script>
+</body>
+</html>

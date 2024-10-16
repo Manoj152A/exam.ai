@@ -3,42 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Face Detection Live Feed</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f0f0f0;
-        }
-        .container {
-            text-align: center;
-        }
-        h1 {
-            color: #333;
-        }
-        #videoFeed {
-            max-width: 100%;
-            height: auto;
-            border: 3px solid #333;
-            border-radius: 10px;
-        }
-    </style>
+    <title>AI Proctoring System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <h1>Face Detection Live Feed</h1>
-        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Live Video Feed">
-    </div>
-
-    <script>
-        window.addEventListener('beforeunload', function() {
-            // Stop the video feed
-            document.getElementById('videoFeed').src = '';
-        });
-    </script>
+    <header>
+        <h1>AI Proctoring System</h1>
+    </header>
+    <main>
+        <section class="introduction">
+            <h2>Welcome to the AI Proctoring System</h2>
+            <p>This system uses artificial intelligence to monitor and ensure the integrity of online examinations.</p>
+            <p>Before you start the exam, you will need to take a reference picture for identity verification throughout the exam.</p>
+        </section>
+        <a href="{{ url_for('capture') }}" class="button">Start Exam Process</a>
+    </main>
 </body>
 </html>

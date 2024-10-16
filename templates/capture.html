@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Capture Reference Image - AI Proctoring System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>AI Proctoring System</h1>
+    </header>
+    <main>
+        <h2>Capture Reference Image</h2>
+        <p>Please position your face clearly in the camera and click the "Capture" button.</p>
+        <video id="video" width="640" height="480" autoplay></video>
+        <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+        <div>
+            <button id="captureButton">Capture</button>
+        </div>
+        <form id="captureForm" method="POST">
+            <input type="hidden" name="image" id="imageData">
+            <label for="name">Your Name:</label>
+            <input type="text" id="name" name="name" required>
+            <button type="submit" id="submitButton" disabled>Submit</button>
+        </form>
+    </main>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

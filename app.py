@@ -1,136 +1,201 @@
-from flask import Flask, render_template, Response
+import os
 import cv2
-import dlib
 import numpy as np
 import logging
 import threading
 import time
-import os
+import base64
+import dlib
+import face_recognition
+from flask import Flask, render_template, Response, jsonify, request, redirect, url_for
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.DEBUG)
 
-# Check for shape predictor file in the models folder
-shape_predictor_file = os.path.join("models", "shape_predictor_68_face_landmarks.dat")
-if not os.path.isfile(shape_predictor_file):
-    print(f"Error: {shape_predictor_file} not found.")
-    print("Please ensure the file is in the 'models' folder.")
-    exit(1)
-
-# Initialize dlib's face detector and facial landmark predictor
-detector = dlib.get_frontal_face_detector()
-predictor = dlib.shape_predictor(shape_predictor_file)
-logging.info("Dlib models loaded successfully")
+# Initialize dlib's face detector
+face_detector = dlib.get_frontal_face_detector()
 
 # Global variables
 camera = None
 output_file = None
 out = None
-is_camera_active = False
+is_exam_active = False
 camera_lock = threading.Lock()
+alerts = []
+reference_encoding = None
+verification_interval = 5  # Verify every 5 seconds
+candidate_name = ""
+last_face_detection_time = time.time()
+consecutive_different_person = 0
+CONSECUTIVE_THRESHOLD = 3
 
-# Set a lower target FPS to ensure all frames are processed
 TARGET_FPS = 10
+FACE_DETECTION_TIMEOUT = 3  # Seconds before "No face detected" alert
 
 def detect_faces(frame):
+    global last_face_detection_time
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = detector(gray)
+    faces = face_detector(gray)
+    
+    if len(faces) == 0:
+        if time.time() - last_face_detection_time > FACE_DETECTION_TIMEOUT:
+            alerts.append("No face detected")
+        return frame, 0
+    
+    if len(faces) > 1:
+        alerts.append("Multiple faces detected")
+    
+    last_face_detection_time = time.time()
     
     for face in faces:
         x, y, w, h = face.left(), face.top(), face.width(), face.height()
         cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        
-        # Get facial landmarks
-        shape = predictor(gray, face)
-        for i in range(68):
-            x, y = shape.part(i).x, shape.part(i).y
-            cv2.circle(frame, (x, y), 2, (0, 0, 255), -1)
     
-    return frame
+    return frame, len(faces)
+
+def get_face_encoding(frame):
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    face_locations = face_recognition.face_locations(rgb_frame)
+    
+    if not face_locations:
+        return None
+    
+    face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+    
+    if face_encodings:
+        return face_encodings[0]
+    return None
+
+def verify_face(current_encoding, reference_encoding, threshold=0.6):
+    if reference_encoding is None or current_encoding is None:
+        return False
+    
+    distance = face_recognition.face_distance([reference_encoding], current_encoding)[0]
+    logging.debug(f"Face verification distance: {distance}")
+    return distance < threshold
 
 def generate_frames():
-    global camera, out, is_camera_active, output_file
+    global camera, out, is_exam_active, output_file, reference_encoding, consecutive_different_person
     
     with camera_lock:
-        if not is_camera_active:
+        if not is_exam_active:
             camera = cv2.VideoCapture(0)
             camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             camera.set(cv2.CAP_PROP_FPS, TARGET_FPS)
             
-            output_folder = r"C:\Users\manoj\Videos\ai"
+            output_folder = r"C:\Users\manoj\Videos\ai_exam"
             os.makedirs(output_folder, exist_ok=True)
-            output_file = os.path.join(output_folder, f"ai_recording_{time.strftime('%Y%m%d_%H%M%S')}.avi")
+            output_file = os.path.join(output_folder, f"exam_recording_{time.strftime('%Y%m%d_%H%M%S')}.avi")
             fourcc = cv2.VideoWriter_fourcc(*'XVID')
             out = cv2.VideoWriter(output_file, fourcc, TARGET_FPS, (640, 480))
             
-            is_camera_active = True
-            logging.info("Camera and recording started")
+            is_exam_active = True
+            logging.info(f"Exam proctoring started. Recording to {output_file}")
     
-    try:
+    start_time = time.time()
+    frame_count = 0
+    last_verification_time = time.time()
+    
+    while is_exam_active:
+        success, frame = camera.read()
+        if not success:
+            logging.error("Failed to read frame from camera")
+            break
+        
+        frame, face_count = detect_faces(frame)
+        
+        current_time = time.time()
+        if face_count == 1:
+            if current_time - last_verification_time >= verification_interval:
+                current_encoding = get_face_encoding(frame)
+                if current_encoding is not None:
+                    if not verify_face(current_encoding, reference_encoding):
+                        consecutive_different_person += 1
+                        if consecutive_different_person >= CONSECUTIVE_THRESHOLD:
+                            alerts.append("Different person detected")
+                            consecutive_different_person = 0
+                    else:
+                        consecutive_different_person = 0
+                    last_verification_time = current_time
+        
+        out.write(frame)
+        
+        ret, buffer = cv2.imencode('.jpg', frame)
+        frame = buffer.tobytes()
+        
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        
+        frame_count += 1
+        time.sleep(max(1./TARGET_FPS - (time.time() - start_time), 0))
         start_time = time.time()
-        frame_count = 0
-        while True:
-            frame_start = time.time()
-            
-            success, frame = camera.read()
-            if not success:
-                logging.error("Failed to grab frame")
-                break
-            
-            frame = detect_faces(frame)
-            
-            # Calculate and display FPS
-            frame_count += 1
-            elapsed_time = time.time() - start_time
-            fps = frame_count / elapsed_time
-            cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            
-            # Write frame to video file
-            out.write(frame)
-            
-            # Encode frame for streaming
-            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if not ret:
-                logging.error("Failed to encode frame")
-                continue
-            
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            
-            # Calculate the time to sleep to maintain the target FPS
-            processing_time = time.time() - frame_start
-            sleep_time = max(1.0/TARGET_FPS - processing_time, 0)
-            time.sleep(sleep_time)
-            
-            # Log actual frame processing time
-            actual_frame_time = time.time() - frame_start
-            logging.debug(f"Frame {frame_count}: Processing time = {processing_time:.4f}s, Sleep time = {sleep_time:.4f}s, Total frame time = {actual_frame_time:.4f}s")
-            
-            # Check if we're maintaining real-time
-            if frame_count % TARGET_FPS == 0:
-                expected_time = frame_count / TARGET_FPS
-                actual_time = elapsed_time
-                logging.info(f"After {frame_count} frames: Expected time = {expected_time:.2f}s, Actual time = {actual_time:.2f}s, Difference = {actual_time - expected_time:.2f}s")
-    finally:
-        with camera_lock:
-            if is_camera_active:
-                camera.release()
-                out.release()
-                is_camera_active = False
-                logging.info(f"Camera stopped and recording saved to {output_file}")
-                logging.info(f"Total frames: {frame_count}, Total time: {elapsed_time:.2f}s, Average FPS: {frame_count/elapsed_time:.2f}")
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
+@app.route('/capture', methods=['GET', 'POST'])
+def capture():
+    global reference_encoding, candidate_name
+    if request.method == 'POST':
+        image_data = request.form['image']
+        candidate_name = request.form['name']
+        
+        # Remove the data URL prefix
+        image_data = image_data.split(',')[1]
+        
+        # Decode the base64 image
+        image_array = np.frombuffer(base64.b64decode(image_data), dtype=np.uint8)
+        image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        
+        # Save the captured image
+        os.makedirs('captures', exist_ok=True)
+        cv2.imwrite(f'captures/{candidate_name}.jpg', image)
+        
+        # Get the face encoding
+        reference_encoding = get_face_encoding(image)
+        
+        if reference_encoding is not None:
+            return redirect(url_for('exam'))
+        else:
+            return "Failed to capture face. Please try again.", 400
+    
+    return render_template('capture.html')
+
+@app.route('/exam')
+def exam():
+    global candidate_name
+    return render_template('exam.html', candidate_name=candidate_name)
+
 @app.route('/video_feed')
 def video_feed():
-    logging.info("Video feed requested")
     return Response(generate_frames(), 
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/start_exam')
+def start_exam():
+    global is_exam_active
+    is_exam_active = True
+    alerts.clear()
+    threading.Thread(target=generate_frames, daemon=True).start()
+    return jsonify({"status": "Exam proctoring started"})
+
+@app.route('/end_exam')
+def end_exam():
+    global is_exam_active, camera, out
+    is_exam_active = False
+    if camera:
+        camera.release()
+    if out:
+        out.release()
+    return jsonify({"status": "Exam ended", "alerts": alerts})
+
+@app.route('/get_alerts')
+def get_alerts():
+    return jsonify({"alerts": alerts})
 
 if __name__ == '__main__':
     app.run(debug=True, threaded=True)
